@@ -1053,7 +1053,9 @@ const App: React.FC = () => {
                 <div className="max-w-2xl mx-auto">
                     <>
                         <Stepper currentStep={currentStep} />
-                        {renderCurrentStep()}
+                        <div key={currentStep} className="step-transition">
+                            {renderCurrentStep()}
+                        </div>
                     </>
                 </div>
             </main>
