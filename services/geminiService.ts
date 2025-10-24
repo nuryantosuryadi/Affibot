@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, Modality } from "@google/genai";
 import type { ImageFile } from '../types';
 import { processAudio } from './audioService';
@@ -48,7 +49,8 @@ export const generateModelImage = async (productImage: ImageData, productName: s
             model: 'gemini-2.5-flash-image',
             contents: { parts: [imagePart, textPart] },
             config: {
-                responseModalities: [Modality.IMAGE, Modality.TEXT],
+                // FIX: responseModalities must contain a single modality.
+                responseModalities: [Modality.IMAGE],
             },
         });
 
@@ -131,8 +133,8 @@ export const generateSpeech = async (
             model: 'gemini-2.5-flash-preview-tts',
             contents: { parts: [{ text: finalPrompt }] },
             config: {
-                // @ts-ignore
-                responseModalities: ["AUDIO"],
+                // FIX: responseModalities must contain a single modality and should use the Modality enum.
+                responseModalities: [Modality.AUDIO],
                 speechConfig: {
                     voiceConfig: {
                         prebuiltVoiceConfig: { voiceName }
@@ -181,7 +183,8 @@ export const generateAdImages = async (modelImage: ImageData, productImage: Imag
                 model: 'gemini-2.5-flash-image',
                 contents: { parts: [modelImagePart, productImagePart, textPart] },
                 config: {
-                    responseModalities: [Modality.IMAGE, Modality.TEXT],
+                    // FIX: responseModalities must contain a single modality.
+                    responseModalities: [Modality.IMAGE],
                 },
             });
 
@@ -211,7 +214,8 @@ export const regenerateAdImage = async (
             model: 'gemini-2.5-flash-image',
             contents: { parts: [modelImagePart, productImagePart, textPart] },
             config: {
-                responseModalities: [Modality.IMAGE, Modality.TEXT],
+                // FIX: responseModalities must contain a single modality.
+                responseModalities: [Modality.IMAGE],
             },
         });
 

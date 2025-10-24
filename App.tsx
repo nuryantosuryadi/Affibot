@@ -1,9 +1,23 @@
 
 
+
 import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import { generateModelImage, determineModelGender, generateAdsCopy, generateSpeech, generateAdImages, generateVideo, generateCaptionAndHashtags, regenerateAdImage } from './services/geminiService';
 import type { ImageFile } from './types';
 import { LoadingSpinner, DownloadIcon } from './components/ui';
+
+// FIX: Define AIStudio interface to resolve type conflict with other global declarations.
+interface AIStudio {
+    hasSelectedApiKey: () => Promise<boolean>;
+    openSelectKey: () => Promise<void>;
+}
+
+declare global {
+    interface Window {
+        // FIX: Use the AIStudio interface for the aistudio property.
+        aistudio?: AIStudio;
+    }
+}
 
 // --- HELPER FUNCTIONS ---
 
@@ -91,6 +105,45 @@ const ImageUpload: React.FC<{ onUpload: (file: File) => void; currentImage: Imag
         </div>
     </div>
 );
+
+const ApiKeySelector: React.FC<{ onKeySelect: () => void }> = ({ onKeySelect }) => {
+    const handleSelectKey = async () => {
+        if (window.aistudio && typeof window.aistudio.openSelectKey === 'function') {
+            await window.aistudio.openSelectKey();
+            // Optimistically assume key is selected to avoid race conditions
+            onKeySelect();
+        }
+    };
+
+    return (
+        <div className="flex flex-col items-center justify-center min-h-screen bg-slate-900 text-slate-200 p-4">
+            <div className="max-w-md w-full text-center bg-slate-800 p-8 rounded-2xl shadow-lg border border-slate-700">
+                <h2 className="text-2xl font-bold text-orange-400 mb-4">API Key Required for Video Generation</h2>
+                <p className="text-slate-300 mb-6">
+                    This tool uses the Veo video generation model which requires you to select your own Google AI Studio API key.
+                    Please select a key to continue.
+                </p>
+                <button
+                    onClick={handleSelectKey}
+                    className="w-full bg-orange-600 hover:bg-orange-700 text-white font-bold py-3 px-4 rounded-lg transition-colors shadow-md"
+                >
+                    Select API Key
+                </button>
+                <p className="text-xs text-slate-500 mt-4">
+                    For more information about API keys and billing, please visit the{' '}
+                    <a
+                        href="https://ai.google.dev/gemini-api/docs/billing"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-orange-500 hover:underline"
+                    >
+                        official documentation
+                    </a>.
+                </p>
+            </div>
+        </div>
+    );
+};
 
 // --- STEP COMPONENTS ---
 
@@ -377,7 +430,8 @@ const Step4Studio: React.FC<{
     setStudio: React.Dispatch<React.SetStateAction<any>>;
     onNext: () => void;
     onBack: () => void;
-}> = ({ modelImage, productImage, productName, productDescription, adsCopyScript, studio, setStudio, onNext, onBack }) => {
+    onApiKeyError: () => void;
+}> = ({ modelImage, productImage, productName, productDescription, adsCopyScript, studio, setStudio, onNext, onBack, onApiKeyError }) => {
     const [isLoading, setIsLoading] = useState<'images' | 'videos' | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [loadingMessage, setLoadingMessage] = useState('');
@@ -448,11 +502,17 @@ const Step4Studio: React.FC<{
                 setStudio(s => ({ ...s, adImages: s.adImages, adVideos: [...generatedVideos] }));
             }
         } catch (err) {
-            setError(err instanceof Error ? err.message : 'Gagal membuat video.');
+            const errorMessage = err instanceof Error ? String(err.message) : String(err);
+            if (errorMessage.includes('Requested entity was not found') || errorMessage.includes('NOT_FOUND')) {
+                setError('API Key error. Please re-select your API key to continue.');
+                onApiKeyError();
+            } else {
+                setError(errorMessage);
+            }
         } finally {
             setIsLoading(null);
         }
-    }, [studio.adImages, setStudio, getVideoPrompts]);
+    }, [studio.adImages, setStudio, getVideoPrompts, onApiKeyError]);
     
     const handleStartVideoGeneration = () => {
         if (studio.adImages.length === 0) {
@@ -476,11 +536,17 @@ const Step4Studio: React.FC<{
                 return { ...s, adVideos: newAdVideos };
             });
         } catch (err) {
-            setError(err instanceof Error ? err.message : 'Gagal membuat ulang video.');
+            const errorMessage = err instanceof Error ? String(err.message) : String(err);
+            if (errorMessage.includes('Requested entity was not found') || errorMessage.includes('NOT_FOUND')) {
+                setError('API Key error. Please re-select your API key to continue.');
+                onApiKeyError();
+            } else {
+                setError(errorMessage);
+            }
         } finally {
             setRegeneratingVideoIndex(null);
         }
-    }, [studio.adImages, setStudio, getVideoPrompts]);
+    }, [studio.adImages, setStudio, getVideoPrompts, onApiKeyError]);
 
     const handleCopyPrompt = (promptToCopy: string, index: number) => {
         navigator.clipboard.writeText(promptToCopy).then(() => {
@@ -966,6 +1032,26 @@ const App: React.FC = () => {
     const [adsCopy, setAdsCopy] = useState<{ script: string; audioUrl: string | null; voiceGender: 'male' | 'female'; voiceStyle: string; }>(initialAdsCopyState);
     const [studio, setStudio] = useState<{ adImages: string[]; adVideos: string[] }>(initialStudioState);
     const [finalVideo, setFinalVideo] = useState<{ url: string | null; extension: string; }>(initialFinalVideoState);
+    
+    const [isKeySelected, setIsKeySelected] = useState(false);
+    const [isCheckingKey, setIsCheckingKey] = useState(true);
+
+    useEffect(() => {
+        const checkKey = async () => {
+            try {
+                if (window.aistudio && typeof window.aistudio.hasSelectedApiKey === 'function') {
+                    const hasKey = await window.aistudio.hasSelectedApiKey();
+                    setIsKeySelected(hasKey);
+                }
+            } catch (e) {
+                console.error("Error checking for API key:", e);
+                setIsKeySelected(false);
+            } finally {
+                setIsCheckingKey(false);
+            }
+        };
+        checkKey();
+    }, []);
 
     const nextStep = () => setCurrentStep(prev => Math.min(prev + 1, 5));
     const prevStep = () => setCurrentStep(prev => Math.max(prev - 1, 1));
@@ -977,6 +1063,8 @@ const App: React.FC = () => {
         setFinalVideo(initialFinalVideoState);
         setCurrentStep(1);
     };
+    const resetApiKeySelection = () => setIsKeySelected(false);
+
 
     const renderCurrentStep = () => {
         switch (currentStep) {
@@ -1025,6 +1113,7 @@ const App: React.FC = () => {
                     setStudio={setStudio}
                     onNext={nextStep}
                     onBack={prevStep}
+                    onApiKeyError={resetApiKeySelection}
                 />;
             case 5:
                  if (studio.adVideos.length < 3 || !adsCopy.audioUrl) {
@@ -1046,6 +1135,18 @@ const App: React.FC = () => {
         }
     };
     
+    if (isCheckingKey) {
+        return (
+            <div className="flex items-center justify-center min-h-screen bg-slate-900">
+                <LoadingSpinner message="Verifying API Key..." />
+            </div>
+        );
+    }
+
+    if (!isKeySelected) {
+        return <ApiKeySelector onKeySelect={() => setIsKeySelected(true)} />;
+    }
+
     return (
         <div className="flex flex-col min-h-screen bg-slate-900">
             <Header />
