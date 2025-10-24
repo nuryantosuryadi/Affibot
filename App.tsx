@@ -616,6 +616,42 @@ const Step4Studio: React.FC<{
 };
 
 
+// --- MUSIC LIBRARY FOR STEP 5 ---
+interface MusicTrack {
+  id: string;
+  title: string;
+  genre: string;
+  url: string;
+}
+
+const musicLibrary: MusicTrack[] = [
+  {
+    id: 'upbeat-corporate',
+    title: 'Upbeat Corporate',
+    genre: 'Upbeat',
+    url: 'https://cdn.pixabay.com/audio/2023/04/18/audio_85244733b8.mp3',
+  },
+  {
+    id: 'inspirational-dream',
+    title: 'Inspirational Dream',
+    genre: 'Chill',
+    url: 'https://cdn.pixabay.com/audio/2022/08/27/audio_528f8007a8.mp3',
+  },
+  {
+    id: 'powerful-epic',
+    title: 'Powerful Epic',
+    genre: 'Epic',
+    url: 'https://cdn.pixabay.com/audio/2023/02/20/audio_c3a0733560.mp3',
+  },
+    {
+    id: 'happy-vlog',
+    title: 'Happy Vlog',
+    genre: 'Upbeat',
+    url: 'https://cdn.pixabay.com/audio/2022/12/22/audio_fb8081752b.mp3',
+  },
+];
+
+
 const Step5Finishing: React.FC<{
     adVideos: string[];
     audioUrl: string;
@@ -631,8 +667,14 @@ const Step5Finishing: React.FC<{
     const [loadingMessage, setLoadingMessage] = useState('');
     const [captionData, setCaptionData] = useState<{ caption: string, hashtags: string } | null>(null);
     const [isCopying, setIsCopying] = useState(false);
+    const [selectedTrack, setSelectedTrack] = useState<MusicTrack | null>(null);
+    const [musicVolume, setMusicVolume] = useState<number>(0.2);
 
-    const combineVideosAndAudio = useCallback(async (videoUrls: string[], audioUrl:string): Promise<{ url: string, extension: string }> => {
+    const combineVideosAndAudio = useCallback(async (
+        videoUrls: string[],
+        voiceOverUrl: string,
+        musicTrack: { url: string; volume: number } | null
+    ): Promise<{ url: string, extension: string }> => {
         setLoadingMessage('Initializing render engine...');
         const canvas = document.createElement('canvas');
         const width = 720;
@@ -648,9 +690,17 @@ const Step5Finishing: React.FC<{
         }
     
         setLoadingMessage('Downloading media assets...');
-        const [audioBuffer, videos] = await Promise.all([
-            fetch(audioUrl).then(res => res.arrayBuffer()).then(buf => audioCtx.decodeAudioData(buf)),
-            Promise.all(videoUrls.map(url => new Promise<HTMLVideoElement>((resolve, reject) => {
+        const audioPromises: Promise<AudioBuffer>[] = [
+            fetch(voiceOverUrl).then(res => res.arrayBuffer()).then(buf => audioCtx.decodeAudioData(buf)),
+        ];
+
+        if (musicTrack) {
+            audioPromises.push(fetch(musicTrack.url).then(res => res.arrayBuffer()).then(buf => audioCtx.decodeAudioData(buf)));
+        }
+
+        const [allAudioBuffers, videos] = await Promise.all([
+             Promise.all(audioPromises),
+             Promise.all(videoUrls.map(url => new Promise<HTMLVideoElement>((resolve, reject) => {
                 const video = document.createElement('video');
                 video.src = url;
                 video.muted = true;
@@ -661,21 +711,20 @@ const Step5Finishing: React.FC<{
                 video.load();
             })))
         ]);
+
+        const voiceOverBuffer = allAudioBuffers[0];
+        const musicBuffer = allAudioBuffers.length > 1 ? allAudioBuffers[1] : null;
     
         const audioDestination = audioCtx.createMediaStreamDestination();
-        const videoStream = canvas.captureStream(30); // 30 FPS
+        const videoStream = canvas.captureStream(30);
         const combinedStream = new MediaStream([
             videoStream.getVideoTracks()[0],
             audioDestination.stream.getAudioTracks()[0]
         ]);
     
         const mimeTypesToTry = [
-            // Prioritize MP4 with common codecs for broad compatibility
-            'video/mp4; codecs="avc1.42E01E, mp4a.40.2"',
-            'video/mp4',
-            // Fallback to WebM, which is great for browsers but less common on devices
-            'video/webm; codecs="vp8, opus"',
-            'video/webm',
+            'video/mp4; codecs="avc1.42E01E, mp4a.40.2"', 'video/mp4',
+            'video/webm; codecs="vp8, opus"', 'video/webm',
         ];
     
         const supportedMimeType = mimeTypesToTry.find(type => MediaRecorder.isTypeSupported(type));
@@ -710,43 +759,48 @@ const Step5Finishing: React.FC<{
             };
         });
     
-        // Audio source will be the master clock
-        const audioSource = audioCtx.createBufferSource();
-        audioSource.buffer = audioBuffer;
-        audioSource.connect(audioDestination);
-        audioSource.onended = () => {
-            if (recorder.state === 'recording') {
-                recorder.stop();
-            }
+        const voiceOverSource = audioCtx.createBufferSource();
+        voiceOverSource.buffer = voiceOverBuffer;
+        voiceOverSource.connect(audioDestination);
+        
+        let musicSource: AudioBufferSourceNode | null = null;
+        if (musicBuffer && musicTrack) {
+            musicSource = audioCtx.createBufferSource();
+            musicSource.buffer = musicBuffer;
+            musicSource.loop = true;
+            const musicGainNode = audioCtx.createGain();
+            musicGainNode.gain.value = musicTrack.volume;
+            musicSource.connect(musicGainNode);
+            musicGainNode.connect(audioDestination);
+        }
+
+        voiceOverSource.onended = () => {
+            if (recorder.state === 'recording') recorder.stop();
+            if (musicSource) musicSource.stop();
         };
         
         recorder.start();
-        audioSource.start(0);
+        voiceOverSource.start(0);
+        if (musicSource) musicSource.start(0);
+
     
         let currentVideoIndex = 0;
         const playNextVideo = () => {
-            if (currentVideoIndex >= videos.length) {
-                // All videos have been played
-                return;
-            }
-            
+            if (currentVideoIndex >= videos.length) return;
             const video = videos[currentVideoIndex];
-            // When one video ends, play the next
             video.onended = () => {
                 currentVideoIndex++;
                 setLoadingMessage(`Rendering scene ${Math.min(currentVideoIndex + 1, videos.length)}/${videos.length}...`);
                 playNextVideo();
             };
-            
             video.currentTime = 0;
             video.play().catch(e => {
                 console.error(`Video ${currentVideoIndex} failed to play`, e);
-                if (recorder.state === 'recording') recorder.stop(); // Stop on error
+                if (recorder.state === 'recording') recorder.stop();
             });
         };
         
         const renderLoop = () => {
-            // Determine which video to draw
             const videoToDraw = videos[currentVideoIndex] || videos[videos.length - 1];
             if (videoToDraw) {
                 ctx.drawImage(videoToDraw, 0, 0, width, height);
@@ -755,8 +809,8 @@ const Step5Finishing: React.FC<{
         };
     
         setLoadingMessage(`Rendering scene 1/${videos.length}...`);
-        playNextVideo(); // Start the video playback chain
-        animationFrameId = requestAnimationFrame(renderLoop); // Start the rendering loop
+        playNextVideo();
+        animationFrameId = requestAnimationFrame(renderLoop);
         
         return recorderPromise;
     }, []);
@@ -768,7 +822,8 @@ const Step5Finishing: React.FC<{
         setError(null);
         setFinalVideo({ url: null, extension: 'mp4' });
         try {
-            const finalVideoData = await combineVideosAndAudio(adVideos, audioUrl);
+            const musicTrack = selectedTrack ? { url: selectedTrack.url, volume: musicVolume } : null;
+            const finalVideoData = await combineVideosAndAudio(adVideos, audioUrl, musicTrack);
             setFinalVideo(finalVideoData);
             setLoadingMessage('Membuat caption & hashtag...');
             const captions = await generateCaptionAndHashtags(productName, productDescription);
@@ -778,12 +833,7 @@ const Step5Finishing: React.FC<{
         } finally {
             setIsLoading(false);
         }
-    }, [adVideos, audioUrl, setFinalVideo, combineVideosAndAudio, finalVideo.url, isLoading, productName, productDescription]);
-    
-    useEffect(() => {
-        handleCombine();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+    }, [adVideos, audioUrl, setFinalVideo, combineVideosAndAudio, finalVideo.url, isLoading, productName, productDescription, selectedTrack, musicVolume]);
 
     const handleCopy = () => {
         if (!captionData) return;
@@ -845,9 +895,49 @@ const Step5Finishing: React.FC<{
                 </div>
             )}
             
-            {!isLoading && !finalVideo.url && !error && (
-                 <div className="text-center">
-                    <p className="text-slate-400">Mempersiapkan video final Anda...</p>
+            {!isLoading && !finalVideo.url && (
+                 <div className="space-y-8">
+                    <div>
+                        <h3 className="text-lg font-bold text-slate-200 mb-4">Pilih Musik Latar (Opsional)</h3>
+                        <div className="space-y-3 max-h-60 overflow-y-auto pr-2">
+                             <div className="flex items-center bg-slate-700/50 p-3 rounded-lg">
+                                <input id="no-music" type="radio" name="music-track" checked={!selectedTrack} onChange={() => setSelectedTrack(null)} className="h-4 w-4 text-orange-600 bg-slate-600 border-slate-500 focus:ring-orange-500"/>
+                                <label htmlFor="no-music" className="ml-3 block text-sm font-medium text-slate-200">
+                                    Tanpa Musik
+                                </label>
+                            </div>
+                            {musicLibrary.map(track => (
+                                <div key={track.id} className="bg-slate-700/50 p-3 rounded-lg">
+                                    <div className="flex items-center">
+                                        <input id={track.id} type="radio" name="music-track" checked={selectedTrack?.id === track.id} onChange={() => setSelectedTrack(track)} className="h-4 w-4 text-orange-600 bg-slate-600 border-slate-500 focus:ring-orange-500"/>
+                                        <label htmlFor={track.id} className="ml-3 block text-sm font-medium text-slate-200">
+                                            {track.title} <span className="text-slate-400">({track.genre})</span>
+                                        </label>
+                                    </div>
+                                    <audio src={track.url} controls className="w-full mt-2 h-8" />
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                    <div>
+                        <label htmlFor="music-volume" className="block text-sm font-medium text-slate-200 mb-2">
+                           Volume Musik Latar: <span className="font-bold">{Math.round(musicVolume * 100)}%</span>
+                        </label>
+                         <input
+                            id="music-volume"
+                            type="range"
+                            min="0"
+                            max="1"
+                            step="0.01"
+                            value={musicVolume}
+                            onChange={(e) => setMusicVolume(parseFloat(e.target.value))}
+                            disabled={!selectedTrack}
+                            className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer disabled:opacity-50"
+                        />
+                    </div>
+                    <button onClick={handleCombine} className="w-full bg-orange-600 hover:bg-orange-700 text-white font-bold py-3 px-4 rounded-lg transition-colors shadow-md">
+                        Render Video Final
+                    </button>
                  </div>
             )}
 
